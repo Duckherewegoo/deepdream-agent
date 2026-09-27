@@ -6,7 +6,7 @@
 [![PyTorch](https://img.shields.io/badge/PyTorch-2.0+-red.svg)](https://pytorch.org/)
 [![LangGraph](https://img.shields.io/badge/LangGraph-0.2+-green.svg)](https://langchain-ai.github.io/langgraph/)
 [![Gradio](https://img.shields.io/badge/Gradio-4.0+-orange.svg)](https://gradio.app/)
-[![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-GPLv3-yellow.svg)](LICENSE)
 
 ---
 
@@ -463,7 +463,7 @@ pytest --cov=deepdream tests/
 
 许可证
 
-本项目采用 MIT 许可证。详见 LICENSE 文件。
+本项目采用 GPLv3 许可证。详见 LICENSE 文件。
 致谢
 
     Google DeepDream - 原始算法灵感
@@ -478,10 +478,10 @@ pytest --cov=deepdream tests/
 
 联系方式
 
-    作者: Your Name
+    作者: Duckherewegoo
 
-    Email: your.email@example.com
+    Email: dakeginger@qq.com
 
-    GitHub: github.com/yourname/deepdream-agent
+    GitHub: github.com/Duckherewegoo/deepdream-agent
 
 🌙 让每个梦都值得被看见

@@ -1,0 +1,17 @@
+# DeepDream 梦境生成助手依赖
+# 基础数值/图像处理
+numpy>=1.24.0
+matplotlib>=3.7.0
+Pillow>=9.5.0
+
+# AI/深度学习框架
+tensorflow>=2.15.0  # 需兼容InceptionV3模型及tf.function
+
+# 大模型/LCEL 相关
+openai>=1.0.0       # 阿里云百炼兼容OpenAI接口
+langchain-core>=1.2.0  # LCEL核心架构依赖
+pydantic>=2.0.0     # langchain-core依赖的Pydantic v2
+
+# 前端界面
+gradio>=4.0.0       # 可视化交互界面
+

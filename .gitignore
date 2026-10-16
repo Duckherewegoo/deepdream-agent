@@ -1,20 +1,7 @@
-# ═══════════════════════════════════════════════════════════════════
-# .gitignore
-# ═══════════════════════════════════════════════════════════════════
-# 原则：
-#   1. 密钥/本地覆盖 → 绝不进库
-#   2. 编译/缓存/日志 → 绝不进库
-#   3. config/schema.yaml + *.example → 必须进库
-# ═══════════════════════════════════════════════════════════════════
-
 # ── 环境与密钥（最高优先级） ──
 .env
 .env.*
 !.env.example
-
-# ── 本地用户配置（只忽略覆盖文件，schema 必须入库） ──
-config/user.yaml
-# 注意：config/schema.yaml / *.example 必须提交，不要在此忽略
 
 # ── Python 编译产物 ──
 __pycache__/
@@ -30,8 +17,6 @@ installer/
 *.egg-info/
 *.egg
 .eggs/
-.unifypy*
-*.spec
 
 # ── 测试 / 类型 / Lint 缓存 ──
 .pytest_cache/
@@ -61,18 +46,6 @@ tmp/
 *.swp
 *~
 
-# ── 数据库 / 检查点 ──
-checkpoints.db
-checkpoints.db-shm
-checkpoints.db-wal
-
-# ── IDE / 编辑器 ──
-.idea/
-.vscode/
-!.vscode/settings.json
-*.sublime-*
-*.code-workspace
-
 # ── 操作系统 ──
 .DS_Store
 .DS_Store?
@@ -81,10 +54,6 @@ checkpoints.db-wal
 .Trashes
 Thumbs.db
 desktop.ini
-
-# 词库要进库，不 ignore；但如果里面有敏感词库分支，单独 ignore
-# data/blocked_words/             ← 不要加这行
-data/blocked_words/_local/         # 本地测试用词库，不提交
 
 #不把损坏的入库污染环境
 broke*

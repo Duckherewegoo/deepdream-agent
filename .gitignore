@@ -58,3 +58,17 @@ desktop.ini
 #不把损坏的入库污染环境
 broke*
 
+# 安全第一
+# 密钥与隐私
+*.pem
+api_host
+keys/
+.env
+
+# 运行时产生的文件
+uploads/
+dream_outputs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/

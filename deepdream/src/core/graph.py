@@ -1,87 +1,82 @@
-"""LangGraph 图定义 - 核心图结构（优化版）"""
+"""LangGraph 图定义 - 核心图结构（重构优化版）"""
+import logging
+import threading
+from typing import Any
+
+from langgraph.graph import END, StateGraph
+
 from ..node import (
-    AgentState,
-    intent_node,
     dream_gen_node,
+    intent_node,
     llm_node,
     output_node,
     should_generate_dream,
 )
-import os
-from typing import Dict, Any, Optional
-from langgraph.graph import StateGraph, END
-from langchain_core.runnables import RunnableLambda
 
-# 预构建图（避免每次都重新构建）
+# 从统一的 state 模块引入
+from ..state import AgentState
+
+logger = logging.getLogger(__name__)
+
+# 预构建图 + 线程安全锁
 _prebuilt_graph = None
+_graph_lock = threading.Lock()
 
 
-def build_graph() -> StateGraph:
-    """构建 LangGraph 状态图（预构建优化）
-    构建 LangGraph 状态图
-
-    图结构：
-    入口 → intent_node → 条件判断
-                      ↓ 需要生成梦境
-                 dream_gen_node → llm_node → output_node → END
-                      ↓ 不需要
-                     llm_node → output_node → END
-
-    Returns:
-        编译后的 LangGraph 图
-    """
-
+def build_graph():
+    """构建 LangGraph 状态图（预构建，线程安全）"""
     global _prebuilt_graph
+
+    # 快路径检查
     if _prebuilt_graph is not None:
         return _prebuilt_graph
 
-    print(f"[GRAPH] 开始构建 LangGraph 状态图...")
+    with _graph_lock:
+        # 双重检查锁定
+        if _prebuilt_graph is not None:
+            return _prebuilt_graph
 
-    # 创建状态图
-    workflow = StateGraph(AgentState)
+        logger.info("[GRAPH] 开始构建 LangGraph 状态图...")
 
-    # 添加节点
-    workflow.add_node("intent", intent_node)
-    workflow.add_node("dream_gen", dream_gen_node)
-    workflow.add_node("llm", llm_node)
-    workflow.add_node("output", output_node)
+        workflow = StateGraph(AgentState)
 
-    # 设置入口点
-    workflow.set_entry_point("intent")
+        # 添加节点
+        workflow.add_node("intent", intent_node)
+        workflow.add_node("dream_gen", dream_gen_node)
+        workflow.add_node("llm", llm_node)
+        workflow.add_node("output", output_node)
 
-    # 添加条件边：意图识别后判断是否需要生成梦境
-    workflow.add_conditional_edges(
-        "intent",
-        should_generate_dream,
-        {
-            "dream_gen": "dream_gen",
-            "llm": "llm",
-        }
-    )
+        # 设置入口
+        workflow.set_entry_point("intent")
 
-    # 梦境生成后到 LLM
-    workflow.add_edge("dream_gen", "llm")
+        # 条件边
+        workflow.add_conditional_edges(
+            "intent",
+            should_generate_dream,
+            {
+                "dream_gen": "dream_gen",
+                "llm": "llm",
+            }
+        )
 
-    # LLM 后到输出节点
-    workflow.add_edge("llm", "output")
+        # 串联边
+        workflow.add_edge("dream_gen", "llm")
+        workflow.add_edge("llm", "output")
+        workflow.add_edge("output", END)
 
-    # 输出节点后结束
-    workflow.add_edge("output", END)
+        # 编译图
+        _prebuilt_graph = workflow.compile()
+        logger.info("[GRAPH] LangGraph 状态图构建完成（缓存已生效）")
 
-    # 编译图
-    app = workflow.compile()
-    _prebuilt_graph = app
-
-    print(f"[GRAPH] LangGraph 状态图构建完成（预构建缓存）")
-    return app
+        return _prebuilt_graph
 
 
 def create_initial_state(
     user_input: str,
-    image_path: Optional[str] = None,
-    output_dir: Optional[str] = None,
-) -> Dict[str, Any]:
-    """创建初始状态"""
+    image_path: str | None = None,
+    output_dir: str | None = None,
+) -> dict[str, Any]:
+    """创建初始状态（过滤掉 None，确保 State 干净）"""
     state = {
         "messages": [],
         "user_input": user_input,
@@ -93,47 +88,41 @@ def create_initial_state(
         "final_output": None,
         "status": "初始化中...",
         "error": None,
+        "output_dir": output_dir,
     }
-
-    if output_dir:
-        state["output_dir"] = output_dir
-
     return state
 
 
 def run_graph(
     user_input: str,
-    image_path: Optional[str] = None,
-    output_dir: Optional[str] = None,
+    image_path: str | None = None,
+    output_dir: str | None = None,
     max_iterations: int = 5,
-) -> Dict[str, Any]:
-    """运行 LangGraph（优化连续使用）"""
-    print(f"\n{'='*60}")
-    print(f"[GRAPH] 开始运行 LangGraph")
-    print(f"[GRAPH] 用户输入: {user_input[:50]}...")
-    print(f"[GRAPH] 图片路径: {image_path}")
-    print(f"[GRAPH] 输出目录: {output_dir}")
-    print(f"{'='*60}")
+) -> dict[str, Any]:
+    """运行 LangGraph"""
+    logger.info(f"[GRAPH] 开始运行 | 输入长度: {len(user_input)} | 图片: {image_path}")
 
-    # 获取预构建的图
     app = build_graph()
-
-    # 创建初始状态
     initial_state = create_initial_state(user_input, image_path, output_dir)
 
-    # 运行图
-    print(f"[GRAPH] 开始执行图...")
-    final_state = app.invoke(initial_state)
-    print(f"[GRAPH] 图执行完成")
+    # 修复：将 max_iterations 真正传给 LangGraph 的 recursion_limit
+    config = {"recursion_limit": max_iterations}
 
-    # 打印最终状态摘要
-    print(f"\n{'='*60}")
-    print(f"[GRAPH] 最终状态摘要:")
-    print(f"[GRAPH]   状态: {final_state.get('status', '未知')}")
-    print(f"[GRAPH]   梦境类型: {final_state.get('dream_type', '无')}")
-    print(f"[GRAPH]   生成图片: {final_state.get('output_image_path', '无')}")
-    print(f"[GRAPH]   错误: {final_state.get('error', '无')}")
-    print(f"[GRAPH]   输出长度: {len(final_state.get('final_output', ''))}")
-    print(f"{'='*60}\n")
+    try:
+        # invoke 的第二参数就是 config
+        final_state = app.invoke(initial_state, config=config)
 
-    return final_state
+        logger.info(
+            f"[GRAPH] 执行完成 | 状态: {final_state.get('status')} | "
+            f"生成图片: {final_state.get('output_image_path')} | "
+            f"错误: {final_state.get('error')}"
+        )
+        return final_state
+
+    except Exception as e:
+        logger.exception(f"[GRAPH] 运行发生致命错误: {e}")
+        # 如果图崩了，至少把错误写回 state，防止上层拿不到错误信息
+        initial_state["error"] = str(e)
+        initial_state["status"] = "执行崩溃"
+        initial_state["final_output"] = f"系统内部错误: {e!s}"
+        return initial_state

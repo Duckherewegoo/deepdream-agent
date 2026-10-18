@@ -1,17 +1,17 @@
 """DeepDream 配置常量"""
+import logging
 import os
 
-# DashScope API 配置
+logger = logging.getLogger(__name__)
+
+# ================= API 配置 =================
 DASHSCOPE_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 
-# 梦境类型关键词映射（修复文字识别）
-DREAM_KEYWORDS = {
-    "normal": ["正常梦", "普通梦", "常规", "normal"],
-    "sweet": ["甜蜜梦", "美梦", "甜梦", "温柔", "治愈", "sweet", "美好"],
-    "nightmare": ["噩梦", "恐怖", "惊悚", "吓人", "nightmare", "轰隆隆"],
-    "mist": ["迷雾梦", "朦胧", "迷雾", "模糊", "mist", "雾"],
-    "crazy": ["疯狂梦", "疯狂", "迷幻", "极致", "crazy", "啊啊啊"]  # 修复"疯狂"识别
-}
+# 控制是否输出底层调试信息（默认关闭，需要时在环境变量里设 DEEPDREAM_DEBUG=true）
+DEBUG_MODE = os.getenv("DEEPDREAM_DEBUG", "false").lower() == "true"
+
+
+# ================= 1. 基础映射字典 =================
 
 # 梦境类型中文名称
 DREAM_CN_NAMES = {
@@ -19,154 +19,140 @@ DREAM_CN_NAMES = {
     "sweet": "美梦",
     "nightmare": "噩梦",
     "mist": "迷雾梦",
-    "crazy": "疯狂梦"
+    "crazy": "疯狂梦",
+    "starlight": "星空梦",
+    "ocean": "海洋梦",
+    "floral": "花海梦"
 }
 
-# 各梦境类型的特征层选择（核心：不同层对应不同视觉特征）
+# 梦境类型关键词映射
+DREAM_KEYWORDS = {
+    "normal": ["正常梦", "普通梦", "常规", "normal"],
+    "sweet": ["甜蜜梦", "美梦", "甜梦", "温柔", "治愈", "美好", "sweet"],
+    "nightmare": ["噩梦", "恐怖", "惊悚", "吓人", "nightmare"],
+    "mist": ["迷雾梦", "朦胧", "迷雾", "模糊", "mist", "雾蒙蒙"],
+    "crazy": ["疯狂梦", "疯狂", "迷幻", "极致", "crazy"],
+    "starlight": ["星空梦", "星梦", "宇宙梦", "银河", "starlight", "星星"],
+    "ocean": ["海洋梦", "深海梦", "波浪梦", "ocean", "海"],
+    "floral": ["花海梦", "花梦", "花园梦", "floral", "花"]
+}
+
+# 各梦境类型的特征层选择
 DREAM_LAYERS = {
-    # 中层，平衡
     "normal": ["Mixed_5b", "Mixed_5c"],
-
-    # 偏底层（v3 里没有 Mixed_4a，用 Conv2d_4a_3x3）
     "sweet": ["Conv2d_3b_1x1", "Conv2d_4a_3x3"],
-
-    # 高层，结构感强
     "nightmare": ["Mixed_6c", "Mixed_7a", "Mixed_7b"],
-
-    # 多层混合
     "mist": ["Mixed_5b", "Mixed_6a", "Mixed_6c", "Mixed_7a"],
-
-    # 全层疯狂梦（✅ 全部真实存在）
     "crazy": [
-        "Conv2d_3b_1x1",
-        "Conv2d_4a_3x3",
-        "Mixed_5b",
-        "Mixed_5c",
-        "Mixed_6c",
-        "Mixed_7b",
-        "Mixed_7c"
-    ]
+        "Conv2d_3b_1x1", "Conv2d_4a_3x3", "Mixed_5b",
+        "Mixed_5c", "Mixed_6c", "Mixed_7b", "Mixed_7c"
+    ],
+    # 星空：中层 + 高层混合，产生结构感 + 纹理闪烁
+    "starlight": ["Mixed_5b", "Mixed_5c", "Mixed_6a", "Mixed_6c"],
+    # 海洋：低层 + 中层，强调纹理流动
+    "ocean": ["Conv2d_4a_3x3", "Mixed_5b", "Mixed_5c"],
+    # 花海：中层，强调繁复的纹理与色彩
+    "floral": ["Mixed_5b", "Mixed_5c", "Mixed_6a"]
 }
-# 优化后的梦境配置参数（核心：通过算法参数体现梦境特征，而非滤镜）
+
+
+# ================= 2. 核心算法参数 =================
+
 DREAM_CONFIGS = {
-    # 正常梦：平衡真实与梦幻
     "normal": {
-        "MAX_SIZE": 800,
-        "OCTAVE_LAYERS": 3,          # 增加octave层数，提升细节
-        "OCTAVE_SCALE": 0.75,
-        "ITER_PER_OCTAVE": 80,       # 更多迭代，增强DeepDream效果
-        "STEP_SIZE": 0.01,
-        "REALITY_FUSION": 0.18,      # 适度现实融合
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 1.0,       # 梯度缩放
-        "COLOR_JITTER": 0.02         # 轻微色彩抖动
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 3, "OCTAVE_SCALE": 0.75, "ITER_PER_OCTAVE": 80,
+        "STEP_SIZE": 0.01, "REALITY_FUSION": 0.18, "SAFE_SHIFT": True, "GRADIENT_SCALE": 1.0,
+        "COLOR_JITTER": 0.02, "GRADIENT_NOISE": 0.0, "DYNAMIC_STEP": False
     },
-    # 美梦：柔和、温暖、治愈（低层特征+小步长+高现实融合）
     "sweet": {
-        "MAX_SIZE": 800,
-        "OCTAVE_LAYERS": 4,
-        "OCTAVE_SCALE": 0.68,            # 更小 scale，细节更柔
-        "ITER_PER_OCTAVE": 50,           # 少一点，别过度生长
-        "STEP_SIZE": 0.006,              # 极小步长，缓慢演化
-        "REALITY_FUSION": 0.12,          # 👈 降低，让梦多一点
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 0.6,           # 👈 更弱梯度，防止锐边
-        "COLOR_JITTER": 0.015,
-        "GRADIENT_NOISE": 0.003,         # 👈 加一点点噪声，像呼吸感
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.68, "ITER_PER_OCTAVE": 50,
+        "STEP_SIZE": 0.006, "REALITY_FUSION": 0.12, "SAFE_SHIFT": True, "GRADIENT_SCALE": 0.6,
+        "COLOR_JITTER": 0.015, "GRADIENT_NOISE": 0.003, "DYNAMIC_STEP": False
     },
-    # 噩梦：扭曲、恐怖、锐利（高层特征+大步长+低现实融合）
     "nightmare": {
-        "MAX_SIZE": 800,
-        "OCTAVE_LAYERS": 4,              # 👈 从 3 → 4，增强多尺度畸变
-        "OCTAVE_SCALE": 0.82,            # 👈 更大 scale，结构更容易崩
-        "ITER_PER_OCTAVE": 120,          # 更强 hallucination
-        "STEP_SIZE": 0.018,              # 更大步长
-        "REALITY_FUSION": 0.02,          # 👈 几乎完全脱离现实
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 1.8,           # 放大梯度，强化边缘
-        "COLOR_JITTER": 0.04,            # 冷/紫/绿偏移
-        "GRADIENT_NOISE": 0.005,         # 👈 加噪声，像信号干扰
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.82, "ITER_PER_OCTAVE": 120,
+        "STEP_SIZE": 0.018, "REALITY_FUSION": 0.02, "SAFE_SHIFT": True, "GRADIENT_SCALE": 1.8,
+        "COLOR_JITTER": 0.04, "GRADIENT_NOISE": 0.005, "DYNAMIC_STEP": False
     },
-    # 迷雾梦：朦胧、模糊、神秘（多尺度+随机梯度扰动）
     "mist": {
-        "MAX_SIZE": 800,
-        "OCTAVE_LAYERS": 5,              # ✅ 这个很好，保留
-        "OCTAVE_SCALE": 0.72,
-        "ITER_PER_OCTAVE": 60,           # 少一点，别太清晰
-        "STEP_SIZE": 0.007,
-        "REALITY_FUSION": 0.18,
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 0.7,           # 弱化细节
-        "COLOR_JITTER": 0.025,
-        "GRADIENT_NOISE": 0.012,         # 👈 关键：用噪声制造“雾感”
-        # ❌ 删掉 BLUR_AMOUNT
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 5, "OCTAVE_SCALE": 0.72, "ITER_PER_OCTAVE": 60,
+        "STEP_SIZE": 0.007, "REALITY_FUSION": 0.18, "SAFE_SHIFT": True, "GRADIENT_SCALE": 0.7,
+        "COLOR_JITTER": 0.025, "GRADIENT_NOISE": 0.012, "DYNAMIC_STEP": False
     },
-    # 疯狂梦：极致迷幻、无约束（全层特征+超多迭代+无现实融合）
     "crazy": {
-        "MAX_SIZE": 800,
-        "OCTAVE_LAYERS": 4,
-        "OCTAVE_SCALE": 0.63,            # 略小，让结构更碎
-        "ITER_PER_OCTAVE": 220,          # 更久
-        "STEP_SIZE": 0.022,              # 更大
-        "REALITY_FUSION": 0.0,
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 2.2,           # 👈 再拉高一点
-        "COLOR_JITTER": 0.07,            # 👈 强烈色偏
-        "GRADIENT_NOISE": 0.008,         # 👈 关键：每一步都抖一下
-        "DYNAMIC_STEP": True
-    }}
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.63, "ITER_PER_OCTAVE": 220,
+        "STEP_SIZE": 0.022, "REALITY_FUSION": 0.0, "SAFE_SHIFT": True, "GRADIENT_SCALE": 2.2,
+        "COLOR_JITTER": 0.07, "GRADIENT_NOISE": 0.008, "DYNAMIC_STEP": True
+    },
+    # ===== 新梦境类型 =====
+    "starlight": {
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 5, "OCTAVE_SCALE": 0.65, "ITER_PER_OCTAVE": 90,
+        "STEP_SIZE": 0.008, "REALITY_FUSION": 0.05, "SAFE_SHIFT": True, "GRADIENT_SCALE": 1.2,
+        "COLOR_JITTER": 0.06, "GRADIENT_NOISE": 0.015, "DYNAMIC_STEP": False,
+        # 独有扩展参数（供 generator.py 识别）
+        "STAR_BRIGHTNESS": 1.4
+    },
+    "ocean": {
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.70, "ITER_PER_OCTAVE": 70,
+        "STEP_SIZE": 0.009, "REALITY_FUSION": 0.15, "SAFE_SHIFT": True, "GRADIENT_SCALE": 0.8,
+        "COLOR_JITTER": 0.04, "GRADIENT_NOISE": 0.008, "DYNAMIC_STEP": False,
+        # 独有扩展参数（供 generator.py 识别）
+        "WAVE_FLOW": 0.3, "DEPTH_FADE": 0.6
+    },
+    "floral": {
+        "MAX_SIZE": 800, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.72, "ITER_PER_OCTAVE": 80,
+        "STEP_SIZE": 0.012, "REALITY_FUSION": 0.08, "SAFE_SHIFT": True, "GRADIENT_SCALE": 1.0,
+        "COLOR_JITTER": 0.08, "GRADIENT_NOISE": 0.005, "DYNAMIC_STEP": False,
+        # 独有扩展参数
+        "PETAL_RADIUS": 0.5
+    }
+}
 
-# ============================================================
-# 实验性梦境参数（不影响现有配置）
-# 用法：cfg = EXPERIMENTAL_DREAM_CONFIGS.get("psychedelic", DREAM_CONFIGS["crazy"])
-# ============================================================
 
+# ================= 3. 实验性参数 =================
 EXPERIMENTAL_DREAM_CONFIGS = {
-    # 极度迷幻模式（LLM 可触发）
     "psychedelic": {
-        "MAX_SIZE": 900,
-        "OCTAVE_LAYERS": 5,
-        "OCTAVE_SCALE": 0.6,
-        "ITER_PER_OCTAVE": 250,
-        "STEP_SIZE": 0.025,
-        "REALITY_FUSION": 0.0,
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 2.5,
-        "COLOR_JITTER": 0.08,
-        "GRADIENT_NOISE": 0.01,
-        "DYNAMIC_STEP": True,
-        "PSYCHEDELIC_INTENSITY": 1.4,  # ← 仅用于 LLM 描述
+        "MAX_SIZE": 900, "OCTAVE_LAYERS": 5, "OCTAVE_SCALE": 0.6, "ITER_PER_OCTAVE": 250,
+        "STEP_SIZE": 0.025, "REALITY_FUSION": 0.0, "SAFE_SHIFT": True, "GRADIENT_SCALE": 2.5,
+        "COLOR_JITTER": 0.08, "GRADIENT_NOISE": 0.01, "DYNAMIC_STEP": True,
+        "PSYCHEDELIC_INTENSITY": 1.4,
     },
-
-    # 极简微梦（适合 subtle 描述）
     "subtle": {
-        "MAX_SIZE": 700,
-        "OCTAVE_LAYERS": 3,
-        "OCTAVE_SCALE": 0.75,
-        "ITER_PER_OCTAVE": 40,
-        "STEP_SIZE": 0.004,
-        "REALITY_FUSION": 0.25,
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 0.6,
-        "COLOR_JITTER": 0.01,
-        "GRADIENT_NOISE": 0.002,
-        "DYNAMIC_STEP": False,
+        "MAX_SIZE": 700, "OCTAVE_LAYERS": 3, "OCTAVE_SCALE": 0.75, "ITER_PER_OCTAVE": 40,
+        "STEP_SIZE": 0.004, "REALITY_FUSION": 0.25, "SAFE_SHIFT": True, "GRADIENT_SCALE": 0.6,
+        "COLOR_JITTER": 0.01, "GRADIENT_NOISE": 0.002, "DYNAMIC_STEP": False,
     },
-
-    # 生物噩梦（结构感极强）
     "biologic": {
-        "MAX_SIZE": 850,
-        "OCTAVE_LAYERS": 4,
-        "OCTAVE_SCALE": 0.7,
-        "ITER_PER_OCTAVE": 150,
-        "STEP_SIZE": 0.018,
-        "REALITY_FUSION": 0.03,
-        "SAFE_SHIFT": True,
-        "GRADIENT_SCALE": 1.8,
-        "COLOR_JITTER": 0.05,
-        "GRADIENT_NOISE": 0.006,
-        "DYNAMIC_STEP": True,
+        "MAX_SIZE": 850, "OCTAVE_LAYERS": 4, "OCTAVE_SCALE": 0.7, "ITER_PER_OCTAVE": 150,
+        "STEP_SIZE": 0.018, "REALITY_FUSION": 0.03, "SAFE_SHIFT": True, "GRADIENT_SCALE": 1.8,
+        "COLOR_JITTER": 0.05, "GRADIENT_NOISE": 0.006, "DYNAMIC_STEP": True,
     },
 }
 
-DEBUG_MODE = True  # 开启后显示梯度/噪声细节
+
+# ================= 4. 模块级自检（Fail-Fast） =================
+
+_EXPECTED_KEYS = set(DREAM_CN_NAMES.keys())
+
+if set(DREAM_KEYWORDS.keys()) != _EXPECTED_KEYS:
+    raise RuntimeError("[CONFIG ERROR] DREAM_KEYWORDS 字典与标准梦境类型不匹配！")
+
+if set(DREAM_LAYERS.keys()) != _EXPECTED_KEYS:
+    raise RuntimeError("[CONFIG ERROR] DREAM_LAYERS 字典与标准梦境类型不匹配！")
+
+if set(DREAM_CONFIGS.keys()) != _EXPECTED_KEYS:
+    raise RuntimeError("[CONFIG ERROR] DREAM_CONFIGS 字典与标准梦境类型不匹配！")
+
+# 优化：只校验所有梦境必备的“基础通用参数”，允许各梦境有自己独有的扩展参数
+_REQUIRED_BASE_PARAMS = {
+    "MAX_SIZE", "OCTAVE_LAYERS", "OCTAVE_SCALE", "ITER_PER_OCTAVE",
+    "STEP_SIZE", "REALITY_FUSION", "SAFE_SHIFT", "GRADIENT_SCALE",
+    "COLOR_JITTER", "GRADIENT_NOISE", "DYNAMIC_STEP"
+}
+
+for dream_type, cfg in DREAM_CONFIGS.items():
+    missing = _REQUIRED_BASE_PARAMS - set(cfg.keys())
+    if missing:
+        raise RuntimeError(f"[CONFIG ERROR] {dream_type} 缺少基础参数: {missing}")
+
+logger.debug("[CONFIG] 所有梦境配置一致性校验通过（含 3 种新梦境扩展）。")

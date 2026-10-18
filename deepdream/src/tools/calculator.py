@@ -1,6 +1,7 @@
 """科学计算器工具"""
-import math
 import json
+import math
+
 from langchain_core.tools import tool
 
 
@@ -92,5 +93,5 @@ def scientific_calculator(expression: str) -> str:
             "success": False,
             "expression": expression,
             "error": str(e),
-            "detail": f"计算错误：{str(e)}"
+            "detail": f"计算错误：{e!s}"
         }, ensure_ascii=False)

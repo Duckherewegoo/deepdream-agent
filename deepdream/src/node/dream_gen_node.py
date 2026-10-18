@@ -1,105 +1,100 @@
 """梦境生成节点 - 调用 DeepDream 生成梦境图片"""
+import logging
 import os
+import threading
 import time
-import traceback
+
 from langchain_core.runnables import RunnableLambda
 
-from ..state.state import AgentState
+from ..config.settings import DREAM_CN_NAMES, DREAM_CONFIGS
 from ..deepdream.generator import DeepDreamGenerator
-from ..config.settings import DREAM_CONFIGS, DREAM_CN_NAMES
+from ..state import AgentState
 
+logger = logging.getLogger(__name__)
 
-# 全局生成器实例（懒加载）
+# ================= 生成器单例（线程安全） =================
 _dream_generator = None
+_generator_lock = threading.Lock()
 
 
 def get_dream_generator() -> DeepDreamGenerator:
-    """获取或创建 DeepDream 生成器单例"""
+    """获取或创建 DeepDream 生成器单例（双重检查锁，保证并发安全）"""
     global _dream_generator
-    if _dream_generator is None:
-        print("[DREAM] 初始化 DeepDream 生成器...")
-        _dream_generator = DeepDreamGenerator()
-        print(f"[DREAM] DeepDream 生成器初始化完成，设备: {_dream_generator.device}")
+    if _dream_generator is not None:
+        return _dream_generator
+
+    with _generator_lock:
+        if _dream_generator is None:
+            logger.info("[DREAM] 正在初始化 DeepDream 生成器（此过程可能需要加载模型，请稍候）...")
+            _dream_generator = DeepDreamGenerator()
+            logger.info(f"[DREAM] 生成器初始化完成，运行设备: {_dream_generator.device}")
+
     return _dream_generator
 
 
-def set_dream_generator_output_dir(output_dir: str):
-    """设置梦境生成器的输出目录"""
-    # 这个函数暂时保留，生成器的 generate 方法会接收 output_dir 参数
-    pass
-
+# ================= 核心节点逻辑 =================
 
 def dream_gen_node(state: AgentState) -> AgentState:
-    """梦境生成节点 - 调用 DeepDream 生成梦境图片
-
-    Args:
-        state: 当前 Agent 状态
-
-    Returns:
-        更新后的状态
-    """
-    print("\n[NODE] 梦境生成节点开始执行")
+    """梦境生成节点 - 调用 DeepDream 生成梦境图片"""
+    logger.info("[NODE] 梦境生成节点开始执行")
 
     dream_type = state.get("dream_type", "normal")
     image_path = state.get("image_path", "")
     output_dir = state.get("output_dir", "./dream_outputs")
 
-    print(
-        f"[DREAM] 梦境类型: {dream_type} ({DREAM_CN_NAMES.get(dream_type, dream_type)})")
-    print(f"[DREAM] 输入图片: {image_path}")
-    print(f"[DREAM] 输出目录: {output_dir}")
-
     dream_cn = DREAM_CN_NAMES.get(dream_type, "梦境")
     state["status"] = f"正在生成{dream_cn}图片，请稍候..."
 
-    # 验证输入
+    # 1. 前置校验
     if not image_path or not os.path.exists(image_path):
-        error_msg = "图片不存在，无法生成梦境"
-        print(f"[DREAM] 错误: {error_msg}")
+        error_msg = "原图不存在，无法生成梦境"
+        logger.error(f"[DREAM] {error_msg} | Path: {image_path}")
         state["error"] = error_msg
-        state["status"] = "生成失败：图片不存在"
+        state["status"] = "生成失败：原图丢失"
         return state
 
     if dream_type not in DREAM_CONFIGS:
+        logger.warning(f"[DREAM] 遇到未知梦境类型 '{dream_type}'，自动降级为 normal")
         dream_type = "normal"
 
+    # 2. 执行生成
     try:
-        # 获取生成器
         generator = get_dream_generator()
-
-        # 记录开始时间
         start_time = time.time()
-        print("[DREAM] 开始生成梦境...")
 
-        # 生成梦境
+        logger.info(f"[DREAM] 开始生成 | 类型: {dream_type} ({dream_cn}) | 输出目录: {output_dir}")
+
         output_path = generator.generate(
-            image_path, dream_type, output_dir=output_dir)
+            image_path,
+            dream_type,
+            output_dir=output_dir
+        )
 
-        # 计算耗时
         elapsed = time.time() - start_time
-        print(f"[DREAM] 梦境生成完成，耗时: {elapsed:.2f} 秒")
-        print(f"[DREAM] 输出图片: {output_path}")
+        logger.info(f"[DREAM] 生成流程结束 | 耗时: {elapsed:.2f}s")
 
-        # 验证输出文件
-        if os.path.exists(output_path):
+        # 3. 结果校验与写回
+        if output_path and os.path.exists(output_path):
             file_size = os.path.getsize(output_path) / 1024
-            print(f"[DREAM] 输出文件大小: {file_size:.1f} KB")
+            logger.info(f"[DREAM] 生成成功: {output_path} ({file_size:.1f} KB)")
             state["output_image_path"] = output_path
             state["status"] = f"{dream_cn}生成完成！"
         else:
-            error_msg = "生成失败，输出文件不存在"
-            print(f"[DREAM] 错误: {error_msg}")
+            error_msg = "算法执行完毕，但输出文件不存在"
+            logger.error(f"[DREAM] ❌ {error_msg} | 预期路径: {output_path}")
             state["error"] = error_msg
-            state["status"] = "生成失败"
+            state["output_image_path"] = None
+            state["status"] = "生成失败：无输出文件"
 
     except Exception as e:
-        error_msg = f"梦境生成失败：{str(e)}"
-        print(f"[DREAM] 异常: {error_msg}")
-        traceback.print_exc()
+        error_msg = f"梦境生成失败：{e!s}"
+        # 修复：使用 logger.exception 自动捕获并打印完整堆栈
+        logger.exception("[DREAM] ❌ 生成过程发生严重异常")
         state["error"] = error_msg
+        state["output_image_path"] = None
         state["status"] = "生成出错了"
 
-    print("[NODE] 梦境生成节点执行完成")
+    logger.info("[NODE] 梦境生成节点执行完成")
     return state
 
 

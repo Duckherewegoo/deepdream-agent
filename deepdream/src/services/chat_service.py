@@ -9,11 +9,11 @@ from typing import Any
 
 from deepdream.src.agent import DreamAgent
 from deepdream.src.deepdream.generator import DeepDreamGenerator
+from deepdream.src.node.dream_gen_node import get_dream_generator # 引入单例获取
 from deepdream.src.utils.meta_utils import load_dream_meta
 from PIL import Image
 
 logger = logging.getLogger(__name__)
-
 
 class ChatService:
     """
@@ -23,16 +23,14 @@ class ChatService:
     def __init__(self, agent: DreamAgent, upload_dir: str):
         self.agent = agent
         self.upload_dir = upload_dir
-        # 延迟加载/实例化生成器
-        self.generator = DeepDreamGenerator()
+        # 删除了冗余的 self.generator = DeepDreamGenerator()
+        # 记录上一次生成的图片路径，供复现使用
+        self.last_output_path: str | None = None
 
     def process_chat(self, user_text: str, user_image: Image.Image) -> dict[str, Any]:
-        """
-        处理聊天与图像生成请求。
-        """
+        """处理聊天与图像生成请求。"""
         try:
             logger.info(f"接收到用户指令: {user_text[:20]}...")
-            # 调用 Agent 核心逻辑
             response_text, output_image_path, final_state = self.agent.chat(
                 user_text, user_image
             )
@@ -42,8 +40,10 @@ class ChatService:
 
             if output_image_path and os.path.exists(output_image_path):
                 output_image = Image.open(output_image_path)
-
-            meta = load_dream_meta(output_image_path) if output_image_path else {}
+                # 记录有效路径，供后续复现
+                self.last_output_path = output_image_path
+                
+            meta = load_dream_meta(self.last_output_path) if self.last_output_path else {}
 
             return {
                 "success": True,
@@ -66,38 +66,41 @@ class ChatService:
             }
 
     def reproduce_dream(self, original_img: Image.Image, new_upload_img: Image.Image = None) -> dict[str, Any]:
-        """
-        根据原图参数复现梦境。
-        """
+        """根据原图参数复现梦境。"""
         if not original_img:
-            return {"success": False, "image": None, "meta": {}, "error_msg": "没有可复用的原图参数"}
+            return {"success": False, "image": None, "meta": {}, "error_msg": "没有可复用的原图"}
 
         try:
-            # 1. 加载原图参数 (假设 load_dream_meta 支持 PIL 对象或路径)
-            # 这里需要看你的 load_dream_meta 实现，如果是按路径存的，可能 original_img 实际上是个路径
-            meta = load_dream_meta(original_img)
+            # 修复：使用缓存的上次输出路径来读取 meta
+            if not self.last_output_path:
+                return {"success": False, "image": None, "meta": {}, "error_msg": "找不到上一次的生成参数"}
+                
+            meta = load_dream_meta(self.last_output_path)
             if not meta:
                 return {"success": False, "image": None, "meta": {}, "error_msg": "未找到原图参数，无法复现"}
 
-            # 2. 确定输入路径
-            input_path = original_img
+            # 如果传了新图，保存新图；否则复用原图路径
             if new_upload_img:
-                # 如果是新上传的图片，保存为临时文件
                 temp_path = os.path.join(self.upload_dir, "temp_reproduce.png")
                 new_upload_img.save(temp_path)
                 input_path = temp_path
+            else:
+                input_path = self.last_output_path
 
-            # 3. 调用底层生成器
-            output_path = self.generator.generate(
+            # 调用单例生成器，不再耗费额外显存
+            generator = get_dream_generator()
+            output_path = generator.generate(
                 input_path=input_path,
                 dream_type=meta["dream_type"],
                 custom_cfg=meta["config"],
                 custom_layers=meta["layers_used"]
             )
 
-            # 4. 组装返回数据
             new_img = Image.open(output_path)
             new_meta = load_dream_meta(output_path)
+            
+            # 更新缓存路径
+            self.last_output_path = output_path
 
             return {
                 "success": True,

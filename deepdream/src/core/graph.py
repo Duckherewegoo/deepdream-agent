@@ -9,8 +9,10 @@ from ..node import (
     dream_gen_node,
     intent_node,
     llm_node,
+    tool_node,
     output_node,
     should_generate_dream,
+    should_continue,
 )
 
 # 从统一的 state 模块引入
@@ -44,24 +46,25 @@ def build_graph():
         workflow.add_node("intent", intent_node)
         workflow.add_node("dream_gen", dream_gen_node)
         workflow.add_node("llm", llm_node)
+        workflow.add_node("tool_execution", tool_node) 
         workflow.add_node("output", output_node)
 
         # 设置入口
         workflow.set_entry_point("intent")
 
-        # 条件边
-        workflow.add_conditional_edges(
-            "intent",
-            should_generate_dream,
-            {
-                "dream_gen": "dream_gen",
-                "llm": "llm",
-            }
-        )
-
-        # 串联边
         workflow.add_edge("dream_gen", "llm")
-        workflow.add_edge("llm", "output")
+    
+        # 将 llm 到 output 的死路，改成条件路由
+        workflow.add_conditional_edges(
+         "llm",
+         should_continue,
+            {
+                "tools": "tool_execution",
+                "end": "output"
+                }
+            )
+        # 工具执行完，回到 llm 继续生成最终回复
+        workflow.add_edge("tool_execution", "llm")
         workflow.add_edge("output", END)
 
         # 编译图

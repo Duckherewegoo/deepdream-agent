@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 _dream_generator = None
 _generator_lock = threading.Lock()
 
-# ✅ 新增：推理锁。防止多用户并发调用，撑爆 GPU 显存
+# 新增：推理锁。防止多用户并发调用，撑爆 GPU 显存
 _inference_lock = threading.Lock()
 
 
@@ -43,7 +43,7 @@ def dream_gen_node(state: AgentState) -> dict:
 
     dream_type = state.get("dream_type", "normal")
     image_path = state.get("image_path", "")
-    # ✅ 确保输出目录是绝对路径，避免底层保存时路径错乱
+    # 确保输出目录是绝对路径，避免底层保存时路径错乱
     output_dir = os.path.abspath(state.get("output_dir", "./dream_outputs"))
 
     dream_cn = DREAM_CN_NAMES.get(dream_type, "梦境")
@@ -52,7 +52,7 @@ def dream_gen_node(state: AgentState) -> dict:
     if not image_path or not os.path.exists(image_path):
         error_msg = "原图不存在，无法生成梦境"
         logger.error(f"[DREAM] {error_msg} | Path: {image_path}")
-        # ✅ LangGraph 规范：只返回更新的字段
+        # LangGraph 规范：只返回更新的字段
         return {
             "error": error_msg,
             "status": "生成失败：原图丢失"
@@ -68,7 +68,7 @@ def dream_gen_node(state: AgentState) -> dict:
         
         logger.info(f"[DREAM] 等待 GPU 资源... 类型: {dream_type} ({dream_cn})")
         
-        # ✅ 关键修复：加锁，保证同一时间只有一个线程在使用 GPU
+        # 关键修复：加锁，保证同一时间只有一个线程在使用 GPU
         with _inference_lock:
             logger.info(f"[DREAM] 拿到 GPU 锁，开始生成 | 输出目录: {output_dir}")
             start_time = time.time()

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 _dream_generator = None
 _output_dir = "./dream_outputs"
 
-# ✅ 动态定位知识库目录（无需硬编码路径）
+# 动态定位知识库目录（无需硬编码路径）
 _KNOWLEDGE_DIR = Path(__file__).parent.parent / "knowledges"
 
 def set_output_dir(output_dir: str):
@@ -44,7 +44,7 @@ def generate_dream(dream_type: str, user_image_path: str) -> str:
     if not user_image_path or not os.path.exists(user_image_path):
         return _build_json_response({"success": False, "msg": "图片不存在", "dream_type": dream_type})
 
-    # ✅ 字典路由：以后加梦境类型，这里完全不用动
+    # 字典路由：以后加梦境类型，这里完全不用动
     if dream_type not in DREAM_CONFIGS:
         dream_type = "normal"
 
@@ -82,7 +82,7 @@ def get_dream_knowledge(topic: str = "all") -> str:
     if not available_topics:
         return _build_json_response({"success": False, "msg": "知识库为空"})
 
-    # ✅ 策略 1：请求所有
+    # 策略 1：请求所有
     if topic == "all":
         contents = []
         for name, path in available_topics.items():
@@ -95,7 +95,7 @@ def get_dream_knowledge(topic: str = "all") -> str:
             "content": "\n\n".join(contents)
         })
 
-    # ✅ 策略 2：请求特定主题
+    # 策略 2：请求特定主题
     elif topic in available_topics:
         content = available_topics[topic].read_text(encoding="utf-8")
         return _build_json_response({
@@ -104,7 +104,7 @@ def get_dream_knowledge(topic: str = "all") -> str:
             "content": content
         })
 
-    # ✅ 策略 3：找不到
+    # 策略 3：找不到
     else:
         return _build_json_response({
             "success": False,

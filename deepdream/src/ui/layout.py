@@ -84,16 +84,21 @@ def create_ui(chat_service: "ChatService") -> gr.Blocks:
             return res["image"], meta_html, get_ui_logs()
 
         def clear_all():
-            return None, "", "等待输入...", None, "等待输入...", "", ""
+            # 顺便清空底层 Service 的缓存
+            if hasattr(chat_service, "last_output_path"):
+                chat_service.last_output_path = None
+            # 返回多一个空字符串给 output_text
+            return None, "", "等待输入...", None, "", "等待输入...", "", ""
+
+
 
         # ================= 绑定事件 =================
         # 定时刷新日志
         timer = gr.Timer(0.5, active=True)
         timer.tick(fn=get_ui_logs, outputs=log_box)
-
         clear_btn.click(
             clear_all,
-            outputs=[user_img, user_input, status_box, output_img, meta_card, log_box, reproduce_img]
+            outputs=[user_img, user_input, status_box, output_img, output_text, meta_card, log_box, reproduce_img]
         )
 
         submit_btn.click(

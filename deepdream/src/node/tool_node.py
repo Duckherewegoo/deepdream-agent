@@ -5,7 +5,6 @@ import time
 from typing import Any
 
 from langchain_core.messages import ToolMessage
-from langchain_core.runnables import RunnableLambda
 
 from ..state import AgentState
 from ..tools import TOOL_MAP
@@ -17,12 +16,24 @@ def _extract_tool_calls(message: Any) -> list[dict[str, Any]]:
     """统一提取工具调用的防御性辅助函数"""
     if not message:
         return []
-    kwargs = getattr(message, "additional_kwargs", None) or {}
-    calls = kwargs.get("tool_calls", [])
-    return calls if isinstance(calls, list) else []
+
+    # 1. 优先找顶层标准属性（新版 LangChain 惯例）
+    calls = getattr(message, "tool_calls", None)
+
+    # 2. 如果顶层没有，再去找 additional_kwargs（旧版或特定第三方模型）
+    if not calls:
+        kwargs = getattr(message, "additional_kwargs", None) or {}
+        calls = kwargs.get("tool_calls", [])
+
+    # 3. 必须是列表
+    if not isinstance(calls, list):
+        return []
+
+    # 4. 内芯校验：过滤掉不是字典的脏数据
+    return [call for call in calls if isinstance(call, dict)]
 
 
-def tool_node(state: AgentState) -> AgentState:
+def tool_node(state: AgentState) -> dict[str, Any]:
     """工具执行节点 - 执行 LLM 调用的工具"""
     logger.info("[NODE] 工具执行节点开始执行")
 
@@ -30,19 +41,19 @@ def tool_node(state: AgentState) -> AgentState:
     messages = state.get("messages") or []
     if not messages:
         logger.warning("[TOOL] messages 为空，跳过工具执行")
-        return state
+        return {}
 
     last_message = messages[-1]
     tool_calls = _extract_tool_calls(last_message)
 
     if not tool_calls:
         logger.info("[TOOL] 最后一条消息没有工具调用，节点直出")
-        return state
+        return {}
 
     logger.info(f"[TOOL] 检测到 {len(tool_calls)} 个工具调用请求")
 
-    # 防御：确保 tool_results 存在
-    tool_results = state.setdefault("tool_results", [])
+    # 防御：确保 tool_results 存在（这里用 state.get 防止直接 mutate 原对象）
+    tool_results = list(state.get("tool_results") or [])
     tool_messages: list[ToolMessage] = []
 
     for idx, tool_call in enumerate(tool_calls, 1):
@@ -63,7 +74,7 @@ def tool_node(state: AgentState) -> AgentState:
             arguments = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
             if not isinstance(arguments, dict):
                 raise TypeError(f"参数解析结果不是字典: {type(arguments)}")
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError, TypeError) as e:
             error_msg = f"工具参数解析失败: {e} | 原始参数: {raw_args!r}"
             logger.error(f"[TOOL] ❌ {error_msg}")
             result = json.dumps(
@@ -131,16 +142,22 @@ def tool_node(state: AgentState) -> AgentState:
             name=tool_name,
         ))
 
-    # 回写历史
-    state["messages"].extend(tool_messages)
     logger.info(
         f"[NODE] 工具执行节点完成 | 成功写入 {len(tool_messages)} 条 ToolMessage"
     )
-    return state
 
+    # 核心修复：返回增量字典，让 LangGraph 自动合并
+    return {
+        "messages": tool_messages,
+        "tool_results": tool_results
+    }
 
 def should_continue(state: AgentState) -> str:
     """条件判断节点 - 决定是否继续执行工具循环"""
+    if state.get("loop_count", 0) >= 5:
+        logger.warning("[ROUTE] 触发循环上限，强制结束")
+        return "end"
+
     messages = state.get("messages") or []
     if not messages:
         logger.info("[ROUTE] messages 为空 -> end")
@@ -156,7 +173,3 @@ def should_continue(state: AgentState) -> str:
     logger.info("[ROUTE] 无工具调用 -> end")
     return "end"
 
-
-# 可运行对象包装
-tool_runnable = RunnableLambda(tool_node)
-should_continue_runnable = RunnableLambda(should_continue)

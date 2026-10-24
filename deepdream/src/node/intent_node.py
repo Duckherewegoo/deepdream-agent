@@ -2,8 +2,6 @@
 import logging
 import os
 
-from langchain_core.runnables import RunnableLambda
-
 from ..config.settings import DREAM_KEYWORDS
 
 # 注意：如果你按照之前建议把 state 移到了 core 层，这里改成 from ..core.state import AgentState
@@ -72,7 +70,3 @@ def should_generate_dream(state: AgentState) -> str:
     logger.info("[ROUTE] 路由决策 -> 进入 [LLM 聊天] 分支")
     return "llm"
 
-
-# 可运行对象包装
-intent_runnable = RunnableLambda(intent_node)
-should_generate_dream_runnable = RunnableLambda(should_generate_dream)

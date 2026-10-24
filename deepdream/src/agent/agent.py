@@ -8,7 +8,6 @@ from PIL import Image
 from ..config.settings import DREAM_KEYWORDS
 from ..core.graph import run_graph
 from ..node import get_output_image_path, init_dashscope
-from ..tools import set_output_dir as set_dream_output_dir
 
 logger = logging.getLogger(__name__)
 
@@ -17,17 +16,19 @@ class DreamAgent:
     """梦境生成 Agent - 基于 LangGraph 的智能助手"""
 
     def __init__(self, upload_dir: str = "./uploads", output_dir: str = "./dream_outputs"):
-        """初始化 Agent"""
         self.upload_dir = os.path.abspath(upload_dir)
         self.output_dir = os.path.abspath(output_dir)
+        try:
+            os.makedirs(self.upload_dir, exist_ok=True)
+            os.makedirs(self.output_dir, exist_ok=True)
+        except OSError as e:
+            logger.error(f"[AGENT] 目录创建失败: {e}")
+            raise RuntimeError(f"无法创建必要的目录: {e}") from e
 
-        os.makedirs(self.upload_dir, exist_ok=True)
-        os.makedirs(self.output_dir, exist_ok=True)
+        # 让 LLM 工具路径与主路径写同一目录
+        from ..tools.dream_gen import set_output_dir as _set_tool_output_dir
+        _set_tool_output_dir(self.output_dir)
 
-        # 设置梦境生成器的输出目录（底层全局状态）
-        set_dream_output_dir(self.output_dir)
-
-        # 初始化第三方服务
         init_dashscope()
         logger.info(f"[AGENT] 初始化完成 | Upload: {self.upload_dir} | Output: {self.output_dir}")
 
@@ -44,54 +45,67 @@ class DreamAgent:
 
         for dream_type, keywords in DREAM_KEYWORDS.items():
             for keyword in keywords:
-                if keyword.lower() in text_lower:
+                idx = text_lower.find(keyword.lower())
+                if idx != -1:
+                    # 往前看 2 个字符，判断有没有否定词
+                    prefix = text_lower[max(0, idx - 2):idx]
+                    if any(neg in prefix for neg in ["不", "别", "没", "非"]):
+                        continue  # 如果是否定词，跳过这个匹配
                     matches.append((keyword, dream_type))
 
         if not matches:
             return None
 
-        # 按匹配到的关键词长度降序排序，取最长的那个作为最终结果
-        matches.sort(key=lambda x: len(x[0]), reverse=True)
+        # 长度降序（越精确越好），同长度时按在句子中出现的先后（越靠前越好）
+        matches.sort(key=lambda x: (-len(x[0]), text_lower.find(x[0])))
         return matches[0][1]
 
     def save_uploaded_image(self, image: Image.Image) -> str:
-        """保存用户上传的图片（修复 PNG quality 参数报错问题）"""
+        """保存用户上传的图片"""
         os.makedirs(self.upload_dir, exist_ok=True)
         filename = f"upload_{uuid.uuid4().hex[:8]}.png"
         filepath = os.path.join(self.upload_dir, filename)
 
-        # 统一转换为 RGB 模式（防止 RGBA/P 模式在某些格式下保存失败）
         if image.mode not in ("RGB", "L"):
             image = image.convert("RGB")
 
-        # 修复：PNG 是无损格式，不能传 quality，传 optimize=True
-        image.save(filepath, format="PNG", optimize=True)
-        return filepath
+        try:
+            image.save(filepath, format="PNG", optimize=True)
+            return filepath
+        except OSError as e:
+            logger.error(f"[AGENT] 图片保存失败: {e}")
+            raise RuntimeError(f"无法保存上传的图片: {e}") from e
 
     def _execute_graph(self, user_text: str, image_path: str | None = None) -> tuple[str, str | None, dict]:
         """内部统一执行方法（DRY 原则）"""
-        # 运行 LangGraph
-        final_state = run_graph(user_text, image_path, output_dir=self.output_dir)
+        try:
+            # 运行 LangGraph
+            final_state = run_graph(user_text, image_path, output_dir=self.output_dir)
+        except Exception as e:
+            logger.exception("[AGENT] 图执行发生穿透异常")
+            return f"系统内部错误: {e}", None, {}
 
         # 获取输出文本
         final_output = final_state.get("final_output", "抱歉，处理失败。")
 
-        # 获取生成的图片路径并验证
+
         output_image_path = get_output_image_path(final_state)
-        if output_image_path and not os.path.exists(output_image_path):
-            logger.warning(f"[AGENT] 生成的图片路径不存在: {output_image_path}")
-            output_image_path = None
 
         return final_output, output_image_path, final_state
 
     def chat(self, user_text: str, user_image: Image.Image | None = None) -> tuple[str, str | None, dict]:
-        """与 Agent 对话（支持传入 PIL 图片）"""
+        """与 Agent 对话"""
         logger.info(f"[AGENT] 收到对话请求 | 有图片: {'是' if user_image else '否'}")
 
         image_path = None
         if user_image is not None:
-            image_path = self.save_uploaded_image(user_image)
-            logger.debug(f"[AGENT] 图片已保存: {image_path}")
+            try:
+                image_path = self.save_uploaded_image(user_image)
+                logger.debug(f"[AGENT] 图片已保存: {image_path}")
+            except Exception as e:
+                # 已确认策略：图片保存失败即降级为无图模式，不阻断对话。
+                logger.error(f"[AGENT] 图片保存失败，降级为无图模式: {e}")
+                image_path = None
 
         return self._execute_graph(user_text, image_path)
 
@@ -99,9 +113,15 @@ class DreamAgent:
         """直接使用图片路径对话"""
         logger.info(f"[AGENT] 收到路径对话请求 | 路径: {image_path}")
 
-        # 验证图片路径
-        if image_path and not os.path.exists(image_path):
-            logger.warning(f"[AGENT] 传入的图片路径不存在: {image_path}")
-            image_path = None
+        # 加固校验：转绝对路径 + 必须存在 + 必须是文件
+        if image_path:
+            try:
+                image_path = os.path.abspath(image_path)
+                if not os.path.isfile(image_path):
+                    logger.warning(f"[AGENT] 传入的图片路径不存在或不是文件: {image_path}")
+                    image_path = None
+            except OSError as e:
+                logger.error(f"[AGENT] 路径校验发生异常: {e}")
+                image_path = None
 
         return self._execute_graph(user_text, image_path)

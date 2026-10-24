@@ -1,16 +1,17 @@
 """LLM 节点 - 使用 dashscope 官方 SDK 调用千问"""
 import logging
 import os
+import random
 import time
+from typing import Any
 
 import dashscope
 from dashscope import Generation
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.runnables import RunnableLambda
 
+from ..config import LLM, LLM_SEARCH, LLM_TEMP, LLM_TOP, SYSTEM_PROMPTS
 from ..state import AgentState
 from ..utils.meta_utils import load_dream_meta
-from ..config.prompts import SYSTEM_PROMPTS
 
 logger = logging.getLogger(__name__)
 
@@ -21,13 +22,21 @@ SYSTEM_PROMPT = SYSTEM_PROMPTS
 
 
 def init_dashscope():
+    """初始化 dashscope。DEBUG 模式下允许无 Key 启动，生产环境强制要求。"""
     api_key = os.getenv("DASHSCOPE_API_KEY", "")
     if api_key:
         dashscope.api_key = api_key
         logger.info("[INIT] dashscope API key 已设置")
-    else:
-        logger.warning("[INIT] 未找到 DASHSCOPE_API_KEY 环境变量！")
-    return api_key
+        return api_key
+
+    # 与 settings.py 的 DEBUG_MODE 语义保持一致
+    debug_mode = os.getenv("DEEPDREAM_DEBUG", "false").lower() == "true"
+    if debug_mode:
+        logger.warning(
+            "[INIT] 未配置 DASHSCOPE_API_KEY（DEEPDREAM_DEBUG=true），真实生成功能将不可用"
+        )
+        return ""
+    raise ValueError("[INIT] 未找到 DASHSCOPE_API_KEY 环境变量！（生产环境必须配置）")
 
 
 def build_dream_tone(meta: dict) -> str:
@@ -70,38 +79,68 @@ def build_dream_tone(meta: dict) -> str:
 
     return "；".join(tone)
 
+def _extract_text(content: Any) -> str:
+    """将 LangChain 可能包含的 list 多模态内容，安全降维为纯字符串"""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        # 提取列表里的纯文本部分（兼容多模态消息）
+        texts = []
+        for item in content:
+            if isinstance(item, dict) and "text" in item:
+                texts.append(item["text"])
+            elif isinstance(item, str):
+                texts.append(item)
+        return " ".join(texts) if texts else str(content)
+    return str(content)
+
 
 def _prepare_messages(messages: list) -> list:
-    """清洗并转换 LangChain 历史消息为 DashScope 格式"""
+    """清洗并转换 LangChain 历史消息为 DashScope 格式（防御加固版）"""
+    # 全局唯一的 System Prompt
     msg_list = [{"role": "system", "content": SYSTEM_PROMPT}]
+
     for msg in messages:
+        content_str = _extract_text(getattr(msg, "content", ""))
+
         if isinstance(msg, HumanMessage):
-            msg_list.append({"role": "user", "content": msg.content})
+            msg_list.append({"role": "user", "content": content_str})
+
         elif isinstance(msg, AIMessage):
-            msg_list.append({"role": "assistant", "content": msg.content})
+            msg_list.append({"role": "assistant", "content": content_str})
+
         elif isinstance(msg, SystemMessage):
-            msg_list.append({"role": "system", "content": msg.content})
+            # 外部的 System 一律丢弃，防止多 System 冲突
+            continue
+
         elif isinstance(msg, ToolMessage):
-            # 修复：不伪装成 user，用明确的系统上下文包裹工具结果
             msg_list.append({
                 "role": "user",
-                "content": f"[系统工具返回结果: {msg.content}]"
+                "content": f"[系统工具返回结果: {content_str}]"
             })
+
+        else:
+            # 未知消息类型（如 FunctionMessage 等）兜底打包，绝不静默丢失
+            msg_list.append({
+                "role": "user",
+                "content": f"[系统附加消息({type(msg).__name__}): {content_str}]"
+            })
+
     return msg_list
 
 
-def llm_node(state: AgentState) -> AgentState:
+def llm_node(state: AgentState) -> dict[str, Any]:
     logger.info("[NODE] LLM 节点开始执行")
 
-    state["status"] = "正在生成回复..."
+    # 从 state 里读取数据（只读）
     user_input = state["user_input"]
     output_image_path = state.get("output_image_path", "")
     dream_type = state.get("dream_type", "")
 
-    # 1. 构建历史消息
+    # 构建历史消息
     msg_list = _prepare_messages(state.get("messages", []))
 
-    # 2. 构建当前用户输入与系统上下文
+    # 构建当前用户输入与系统上下文
     current_input = user_input
     if output_image_path and dream_type:
         dream_cn = {
@@ -128,47 +167,55 @@ def llm_node(state: AgentState) -> AgentState:
                 f"请严格根据以上特征描述画面，禁止提及生成过程、文件路径或技术参数。"
             )
             logger.info("[LLM] 进入正常描述模式")
-
     msg_list.append({"role": "user", "content": current_input})
 
-    # 3. 调用 API（带简单重试机制）
+    # 调用 API（带指数退避 + Jitter 重试）
     max_retries = 2
     for attempt in range(max_retries + 1):
         try:
             logger.info(f"[LLM] 正在调用千问 API (尝试 {attempt + 1}/{max_retries + 1})...")
             response = Generation.call(
-                model="qwen-turbo",
+                model=LLM,
                 messages=msg_list,
                 result_format='message',
-                temperature=0.65,
-                top_p=0.8,
-                enable_search=False,
+                temperature=LLM_TEMP,
+                top_p=LLM_TOP,
+                enable_search=LLM_SEARCH,
             )
 
             if response.status_code == 200:
                 ai_content = response.output.choices[0].message.content
                 logger.info(f"[LLM] API 调用成功 | 回复长度: {len(ai_content)}")
-
-                state["messages"].append(AIMessage(content=ai_content))
-                state["status"] = "回复生成完成"
-                return state
+                current_loop = state.get("loop_count", 0)
+                # 返回增量字典，LangGraph 会自动合并
+                return {
+                    "messages": [AIMessage(content=ai_content)],
+                    "status": "回复生成完成",
+                    "loop_count": current_loop + 1
+                }
             else:
                 raise RuntimeError(f"API返回错误码 {response.status_code}: {response.message}")
 
         except Exception as e:
-            logger.warning(f"[LLM] API 调用异常: {e}")
+            logger.exception("[LLM] API 调用异常")
+
+            # 最后一次尝试，直接返回报错状态
             if attempt == max_retries:
-                # 最终失败
                 error_msg = "大模型服务暂时不可用，请稍后再试。"
                 logger.error(f"[LLM] 最终失败: {e!s}")
-                state["messages"].append(AIMessage(content=error_msg))
-                state["error"] = error_msg
-                state["status"] = "出错了"
-                return state
-            time.sleep(1) # 简单退避
+                return {
+                    "messages": [AIMessage(content=error_msg)],
+                    "error": error_msg,
+                    "status": "出错了"
+                }
 
-    return state
+            # 指数退避 + Jitter
+            # attempt 0 -> 睡 1~2 秒
+            # attempt 1 -> 睡 2~3 秒
+            delay = (2 ** attempt) + random.uniform(0, 1)
+            logger.warning(f"[LLM] 触发退避，等待 {delay:.2f} 秒后重试...")
+            time.sleep(delay)
 
+    # 理论上进不来，但为了类型检查，给个兜底
+    return {"status": "未知状态"}
 
-# 可运行对象包装
-llm_runnable = RunnableLambda(llm_node)

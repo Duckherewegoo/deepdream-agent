@@ -1,6 +1,7 @@
-from typing import Any, Annotated, TypedDict
-from langgraph.graph.message import add_messages
+from typing import Annotated, Any, TypedDict
+
 from langchain_core.messages.base import BaseMessage
+from langgraph.graph.message import add_messages
 
 
 class AgentState(TypedDict):
@@ -12,5 +13,6 @@ class AgentState(TypedDict):
     need_dream_gen: bool
     tool_results: list[dict[str, Any]]
     final_output: str | None
+    loop_count: int
     status: str
     error: str | None

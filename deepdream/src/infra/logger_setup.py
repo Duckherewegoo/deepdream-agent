@@ -4,12 +4,13 @@ logger_setup.py — 日志基础设施
 """
 import logging
 import sys
+import threading
 from collections import deque
 
 # 全局日志缓存队列（供前端读取）
 _ui_logs = deque(maxlen=300)
 _logger = logging.getLogger(__name__)
-
+_logs_lock = threading.Lock()
 
 class GradioUIHandler(logging.Handler):
     """
@@ -21,7 +22,8 @@ class GradioUIHandler(logging.Handler):
             msg = self.format(record)
             # 过滤掉不需要展示给用户的第三方库日志（比如 httpx, PIL 等）
             if record.name.startswith("deepdream"):
-                _ui_logs.append(msg)
+                with _logs_lock:
+                    _ui_logs.append(msg)
         except Exception:
             # 必须捕获所有异常并调用 handleError，
             # 否则日志记录失败会导致整个程序崩溃。
@@ -30,12 +32,14 @@ class GradioUIHandler(logging.Handler):
 
 def get_ui_logs() -> str:
     """供 Gradio 定时器调用的接口：获取并拼接当前缓存里的日志。"""
-    return "\n".join(_ui_logs)
+    with _logs_lock:
+        return "\n".join(_ui_logs)
 
 
 def clear_ui_logs():
     """清空前端日志"""
-    _ui_logs.clear()
+    with _logs_lock:
+        _ui_logs.clear()
 
 
 def setup_logger(level=logging.INFO):
@@ -57,7 +61,8 @@ def setup_logger(level=logging.INFO):
         datefmt="%H:%M:%S"
     )
     ui_fmt = logging.Formatter(
-        "[%(levelname)s] %(message)s"
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%H:%M:%S"
     )
 
     # 2. 控制台 Handler

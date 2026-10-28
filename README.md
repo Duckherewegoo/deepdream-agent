@@ -23,6 +23,7 @@ deepdream_project/
 ├── main.py                   # 主程序入口（Gradio 界面 + CLI 入口）
 ├── uploads/                  # 上传图片目录
 ├── dream_outputs/            # 梦境输出目录
+├── docs/adr/                 # ADR架构文档
 └── deepdream/
     ├── __init__.py
     └── src/
